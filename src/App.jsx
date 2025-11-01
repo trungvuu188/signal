@@ -1,80 +1,114 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import * as signalR from "@microsoft/signalr";
 import Header from "./Header";
+import Login from "./Login";
+import axios from "axios";
+
+const API_BASE_INVITATION = "https://localhost:5001/api/invitation";
+const API_BASE_NOTIFICATION = "https://localhost:5001/api/notifications";
 
 export default function App() {
-
   const [connection, setConnection] = useState(null);
-  const [connectionStatus, setConnectionStatus] = useState('Disconnected');
-  const [messages, setMessages] = useState([]);
+  const [connectionStatus, setConnectionStatus] = useState("Disconnected");
+  const [notifications, setNotifications] = useState([]);
   const [notificationCount, setNotificationCount] = useState(0);
-  const [hubUrl, setHubUrl] = useState('https://your-signalr-hub-url/notifications');
-  const [messageInput, setMessageInput] = useState('');
+  const [hubUrl, setHubUrl] = useState("https://localhost:5001/hubs/notification");
+  const [token, setToken] = useState(() => localStorage.getItem("token"));
+  const [responseMessage, setResponseMessage] = useState(null);
+  const [loading, setLoading] = useState(false);
 
+  // 🟢 Load stored notifications from DB
+  const fetchNotifications = async () => {
+    if (!token) return;
+    try {
+      setLoading(true);
+      const res = await axios.get(API_BASE_NOTIFICATION, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.data && res.data.data) {
+        setNotifications(res.data.data);
+        setNotificationCount(res.data.data.filter((n) => !n.isRead).length);
+        console.log("Fetched stored notifications ✅");
+      }
+    } catch (err) {
+      console.error("Error fetching notifications:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 🟢 Connect to SignalR hub
   const connectToHub = async () => {
     try {
-      // Note: In a real Vite project, you would install @microsoft/signalr:
-      // npm install @microsoft/signalr
-      // import * as signalR from '@microsoft/signalr';
-      
-      setConnectionStatus('Connecting...');
-      
-      // Simulated connection for demo purposes
-      // In real implementation, replace with:
-      // const newConnection = new signalR.HubConnectionBuilder()
-      //   .withUrl(hubUrl)
-      //   .withAutomaticReconnect()
-      //   .build();
-      
-      // await newConnection.start();
-      // setConnection(newConnection);
-      
-      // Simulate successful connection
-      setTimeout(() => {
-        setConnectionStatus('Connected');
-        addMessage('System', 'Connected to SignalR hub');
-      }, 1000);
-      
+      setConnectionStatus("Connecting...");
+
+      const newConnection = new signalR.HubConnectionBuilder()
+        .withUrl(hubUrl, {
+          accessTokenFactory: () => localStorage.getItem("token"),
+        })
+        .withAutomaticReconnect()
+        .build();
+
+      // 🔔 Receive notification
+      newConnection.on("ReceiveNotification", (content) => {
+        console.log("📨 Received notification:", content);
+        addNotification({
+          id: Date.now(),
+          title: content.title || "Thông báo mới",
+          message: content.message || content,
+          type: content.type || 9003,
+          isActionable: content.isActionable ?? false,
+          createdAt: content.createdAt || new Date().toISOString(),
+          relatedId: content.relatedId || null,
+          isRead: false,
+        });
+      });
+
+      await newConnection.start();
+      setConnection(newConnection);
+      setConnectionStatus("Connected");
+      console.log("✅ Connected to SignalR hub");
     } catch (error) {
-      setConnectionStatus('Connection Failed');
-      addMessage('System', `Connection error: ${error.message}`);
+      setConnectionStatus("Connection Failed");
+      console.error("❌ Connection error:", error.message);
     }
   };
 
-  const disconnect = () => {
-    if (connection) {
-      connection.stop();
-    }
-    setConnectionStatus('Disconnected');
+  // 🔴 Disconnect
+  const disconnect = async () => {
+    if (connection) await connection.stop();
+    setConnectionStatus("Disconnected");
     setConnection(null);
-    addMessage('System', 'Disconnected from SignalR hub');
+    console.log("🔴 Disconnected from SignalR hub");
   };
 
-  const addMessage = (sender, text) => {
-    const newMessage = {
-      id: Date.now(),
-      sender,
-      text,
-      timestamp: new Date().toLocaleTimeString()
-    };
-    setMessages(prev => [...prev, newMessage]);
-    if (sender !== 'System' && sender !== 'You') {
-      setNotificationCount(prev => prev + 1);
+  // 📨 Add a notification
+  const addNotification = (notif) => {
+    setNotifications((prev) => [notif, ...prev]);
+    setNotificationCount((prev) => prev + 1);
+  };
+
+  // ✅ Handle Accept / Reject
+  const handleRespond = async (relatedId, accepted) => {
+    try {
+      await axios.get(`${API_BASE_INVITATION}/respond`, {
+        params: { relatedId, accepted },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      setNotifications((prev) =>
+        prev.map((n) =>
+          n.relatedId === relatedId ? { ...n, isRead: true } : n
+        )
+      );
+
+      setResponseMessage(
+        accepted ? "✅ Bạn đã chấp nhận lời mời." : "❌ Bạn đã từ chối lời mời."
+      );
+    } catch (err) {
+      console.error(err);
+      setResponseMessage("⚠️ Có lỗi xảy ra khi phản hồi lời mời.");
     }
-  };
-
-  const sendMessage = () => {
-    if (!messageInput.trim()) return;
-    
-    // In real implementation:
-    // connection.invoke('SendMessage', messageInput);
-    
-    addMessage('You', messageInput);
-    setMessageInput('');
-    
-    // Simulate receiving a response
-    setTimeout(() => {
-      addMessage('Server', `Echo: ${messageInput}`);
-    }, 500);
   };
 
   const handleBellClick = () => {
@@ -83,109 +117,161 @@ export default function App() {
 
   const getStatusColor = () => {
     switch (connectionStatus) {
-      case 'Connected': return 'text-green-600';
-      case 'Connecting...': return 'text-yellow-600';
-      case 'Connection Failed': return 'text-red-600';
-      default: return 'text-gray-600';
+      case "Connected":
+        return "text-green-600";
+      case "Connecting...":
+        return "text-yellow-600";
+      case "Connection Failed":
+        return "text-red-600";
+      default:
+        return "text-gray-600";
     }
   };
 
+  const handleLogin = (newToken) => {
+    localStorage.setItem("token", newToken);
+    setToken(newToken);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    setToken(null);
+    disconnect();
+  };
+
+  // 🧩 Auto connect & load notifications
+  useEffect(() => {
+    if (token) {
+      fetchNotifications();
+      if (!connection) connectToHub();
+    }
+    return () => {
+      if (connection) connection.stop();
+    };
+  }, [token]);
+
   return (
     <div className="min-h-screen bg-gray-100">
-      <Header 
-        notificationCount={notificationCount} 
-        onBellClick={handleBellClick}
-      />
-      
+      <Header notificationCount={notificationCount} onBellClick={handleBellClick} />
+
       <div className="container mx-auto px-4 py-8">
-        {/* Connection Panel */}
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">Connection Settings</h2>
-          
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              SignalR Hub URL
-            </label>
-            <input
-              type="text"
-              value={hubUrl}
-              onChange={(e) => setHubUrl(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Enter SignalR hub URL"
-            />
+        {!token ? (
+          <div className="max-w-lg mx-auto">
+            <Login onLogin={handleLogin} />
+            <p className="mt-4 text-sm text-gray-600">
+              Dev server proxies API calls to <code>/api</code> →{" "}
+              <code>https://localhost:5001</code>.
+            </p>
           </div>
-          
-          <div className="flex items-center gap-4">
-            <button
-              onClick={connectToHub}
-              disabled={connectionStatus === 'Connected' || connectionStatus === 'Connecting...'}
-              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-            >
-              Connect
-            </button>
-            <button
-              onClick={disconnect}
-              disabled={connectionStatus === 'Disconnected'}
-              className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-            >
-              Disconnect
-            </button>
-            <span className={`font-medium ${getStatusColor()}`}>
-              Status: {connectionStatus}
-            </span>
-          </div>
-        </div>
+        ) : (
+          <>
+            <div className="flex justify-end mb-4">
+              <button
+                onClick={handleLogout}
+                className="px-3 py-1 bg-gray-200 rounded"
+              >
+                Sign out
+              </button>
+            </div>
 
-        {/* Messages Panel */}
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-lg font-semibold mb-4">Messages</h2>
-          
-          <div className="border border-gray-300 rounded-md p-4 h-64 overflow-y-auto mb-4 bg-gray-50">
-            {messages.length === 0 ? (
-              <p className="text-gray-500 text-center">No messages yet</p>
-            ) : (
-              messages.map(msg => (
-                <div key={msg.id} className="mb-2 pb-2 border-b border-gray-200 last:border-0">
-                  <div className="flex items-baseline gap-2">
-                    <span className="font-semibold text-sm text-blue-600">{msg.sender}</span>
-                    <span className="text-xs text-gray-500">{msg.timestamp}</span>
+            {/* Connection Info */}
+            <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+              <h2 className="text-lg font-semibold mb-4">Connection Settings</h2>
+
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  SignalR Hub URL
+                </label>
+                <input
+                  type="text"
+                  value={hubUrl}
+                  onChange={(e) => setHubUrl(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Enter SignalR hub URL"
+                />
+              </div>
+
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={connectToHub}
+                  disabled={
+                    connectionStatus === "Connected" ||
+                    connectionStatus === "Connecting..."
+                  }
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  Connect
+                </button>
+                <button
+                  onClick={disconnect}
+                  disabled={connectionStatus === "Disconnected"}
+                  className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  Disconnect
+                </button>
+                <span className={`font-medium ${getStatusColor()}`}>
+                  Status: {connectionStatus}
+                </span>
+              </div>
+            </div>
+
+            {/* 🔔 Notifications Panel */}
+            <div className="bg-white rounded-lg shadow-md p-6">
+              <h2 className="text-lg font-semibold mb-4">🔔 Thông báo của bạn</h2>
+
+              {loading ? (
+                <p className="text-gray-500">Đang tải thông báo...</p>
+              ) : notifications.length === 0 ? (
+                <p className="text-gray-500">Không có thông báo nào.</p>
+              ) : (
+                notifications.map((n) => (
+                  <div
+                    key={n.id || n.relatedId}
+                    className="border p-3 mb-3 rounded shadow-sm bg-gray-50"
+                  >
+                    <h4 className="font-semibold text-gray-800 mb-1">{n.title}</h4>
+
+                    {/* Render message as HTML */}
+                    <div
+                      className="text-gray-700 mb-2"
+                      dangerouslySetInnerHTML={{ __html: n.message }}
+                    />
+
+                    <p className="text-xs text-gray-500 mb-2">
+                      {n.createdOn || n.createdAt
+                        ? new Date(n.createdOn || n.createdAt).toLocaleString("vi-VN")
+                        : "Không rõ thời gian"}
+                    </p>
+
+                    {/* Accept / Reject */}
+                    {n.isActionable && (n.type === 9003 || n.type === "INVITE") && (
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleRespond(n.relatedId, true)}
+                          className="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600"
+                        >
+                          Accept
+                        </button>
+                        <button
+                          onClick={() => handleRespond(n.relatedId, false)}
+                          className="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <p className="text-gray-800 mt-1">{msg.text}</p>
+                ))
+              )}
+
+              {responseMessage && (
+                <div className="mt-3 p-2 bg-blue-100 border rounded text-blue-800">
+                  {responseMessage}
                 </div>
-              ))
-            )}
-          </div>
-
-          {/* Send Message */}
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={messageInput}
-              onChange={(e) => setMessageInput(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
-              placeholder="Type a message..."
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            <button
-              onClick={sendMessage}
-              disabled={connectionStatus !== 'Connected'}
-              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-            >
-              Send
-            </button>
-          </div>
-        </div>
-
-        {/* Instructions */}
-        <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <h3 className="font-semibold text-blue-900 mb-2">Setup Instructions:</h3>
-          <ol className="list-decimal list-inside space-y-1 text-sm text-blue-800">
-            <li>Install SignalR client: <code className="bg-blue-100 px-1 rounded">npm install @microsoft/signalr</code></li>
-            <li>Uncomment the SignalR code in the connectToHub function</li>
-            <li>Replace the hub URL with your actual SignalR endpoint</li>
-            <li>Set up event listeners for your hub methods</li>
-          </ol>
-        </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
