@@ -4,15 +4,15 @@ import Header from "./Header";
 import Login from "./Login";
 import axios from "axios";
 
-const API_BASE_INVITATION = "https://localhost:5001/api/invitation";
-const API_BASE_NOTIFICATION = "https://localhost:5001/api/notifications";
+const API_BASE_INVITATION = "https://be.dev.familytree.io.vn/api/invitation";
+const API_BASE_NOTIFICATION = "https://be.dev.familytree.io.vn/api/notifications";
 
 export default function App() {
   const [connection, setConnection] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState("Disconnected");
   const [notifications, setNotifications] = useState([]);
   const [notificationCount, setNotificationCount] = useState(0);
-  const [hubUrl, setHubUrl] = useState("https://localhost:5001/hubs/notification");
+  const [hubUrl, setHubUrl] = useState("https://be.dev.familytree.io.vn/hubs/notification");
   const [token, setToken] = useState(() => localStorage.getItem("token"));
   const [responseMessage, setResponseMessage] = useState(null);
   const [loading, setLoading] = useState(false);

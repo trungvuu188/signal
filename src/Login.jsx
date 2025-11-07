@@ -25,7 +25,7 @@ export default function Login({ onLogin }) {
 
       console.debug('Login request payload:', payload);
 
-      const res = await fetch('/api/account/login', {
+      const res = await fetch('https://be.dev.familytree.io.vn/api/account/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
